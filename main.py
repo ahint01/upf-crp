@@ -403,4 +403,161 @@ print("=" * 70)
 # Save the updated matrix with the quartile assignments for the statistical models
 df_matrix.to_csv("nhanes_final_model_matrix.csv", index=False)
 print("💾 Quartile vectors successfully integrated and saved to disk.")
-# %%
+#%% [markdown]
+# # Step 7: Clinical Inflammatory Profiling
+# Evaluates baseline systemic inflammation (hs-CRP) distributions 
+# across the dietary exposure quartiles specifically within the RA cohort.
+
+#%%
+import pandas as pd
+import numpy as np
+
+# Load our final integrated model matrix
+df_models = pd.read_csv("nhanes_final_model_matrix.csv")
+
+# Filter specifically to your 1,126 verified Rheumatoid Arthritis cases
+df_ra = df_models[df_models['CLINICAL_ARM'] == 'RA Case'].copy()
+
+print("🩺 SYSTEMIC INFLAMMATION PROFILE WITHIN THE RA COHORT")
+print("=" * 75)
+print(f"Total RA Patients Analyzed: {df_ra.shape[0]}")
+print(f"Overall Cohort Median hs-CRP: {df_ra['LBXHSCRP'].median():.2f} mg/L\n")
+print("-" * 75)
+
+# Calculate the median and interquartile range (IQR) of CRP within each dietary quartile
+crp_profile = df_ra.groupby('UPF_QUARTILE').agg(
+    patient_count=('LBXHSCRP', 'count'),
+    median_crp=('LBXHSCRP', 'median'),
+    q25_crp=('LBXHSCRP', lambda x: np.percentile(x, 25)),
+    q75_crp=('LBXHSCRP', lambda x: np.percentile(x, 75))
+).reindex(['Quartile 1 (Lowest UPF)', 'Quartile 2 (Low-Mid)', 'Quartile 3 (Mid-High)', 'Quartile 4 (Highest UPF)'])
+
+print("📊 BIOMARKER DISPOSITION BY DIETARY TIER (RA CASES ONLY):")
+print(f"{'Dietary Category':<26} | {'N':<5} | {'Median hs-CRP (mg/L)':<20} | {'[25th - 75th IQR]':<15}")
+print("-" * 75)
+for idx, row in crp_profile.iterrows():
+    print(f"{idx:<26} | {int(row['patient_count']):<5} | {row['median_crp']:<20.2f} | [{row['q25_crp']:.2f} - {row['q75_crp']:.2f}]")
+print("=" * 75)
+
+# Calculate the proportion of patients with clinically elevated CRP (> 3.0 mg/L, high cardiovascular/systemic risk)
+df_ra['ELEVATED_CRP'] = np.where(df_ra['LBXHSCRP'] > 3.0, 1, 0)
+elevated_pct = df_ra.groupby('UPF_QUARTILE')['ELEVATED_CRP'].mean() * 100
+
+print("\n🚨 PROPORTION OF RA PATIENTS WITH CLINICALLY ELEVATED INFLAMMATION (>3.0 mg/L):")
+for q in choices:
+    print(f"   🔸 {q:<24}: {elevated_pct.get(q, 0):.1f}% of patients")
+print("=" * 75)
+
+#%% [markdown]
+# # Step 8: Multivariable Survey-Weighted Linear Regression Models
+# Constructs robust OLS models mapping log-transformed hs-CRP against 
+# UPF dietary quartiles, adjusting for primary clinical and demographic confounders.
+
+#%%
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+from statsmodels.formula.api import wls
+
+# Load our comprehensive modeling dataset
+df_analysis = pd.read_csv("nhanes_final_model_matrix.csv")
+
+# Filter strictly down to the 1,126 Rheumatoid Arthritis cases for the core analysis
+df_ra_model = df_analysis[df_analysis['CLINICAL_ARM'] == 'RA Case'].copy()
+
+# --- PREPARE VARIABLES FOR REGRESSION ---
+# 1. Log-transform the skewed dependent variable (adding small constant to prevent log(0) if any exist)
+df_ra_model['LOG_CRP'] = np.log(df_ra_model['LBXHSCRP'].replace(0, 0.01))
+
+# 2. Map Sex cleanly (NHANES 1 = Male, 2 = Female)
+df_ra_model['SEX'] = np.where(df_ra_model['RIAGENDR'] == 2, 'Female', 'Male')
+
+# 3. Handle missing covariate entries using standard complete-case subsetting for the model
+analysis_cols = ['LOG_CRP', 'UPF_QUARTILE', 'RIDAGEYR', 'SEX', 'RIDRETH3', 'INDFMPIR', 'BMXBMI', 'total_daily_kcal', 'WTM_4YR']
+df_ra_clean = df_ra_model[analysis_cols].dropna().copy()
+
+print("🏁 MULTIVARIABLE SURVEY-WEIGHTED REGRESSION MODEL ENGINE")
+print("=" * 80)
+print(f"Analytic Sample Size after complete-case covariate cleaning: {df_ra_clean.shape[0]} RA patients")
+print("-" * 80)
+
+# Set Quartile 1 (Lowest UPF intake) as the reference group for the categorical model
+df_ra_clean['UPF_QUARTILE'] = pd.Categorical(
+    df_ra_clean['UPF_QUARTILE'], 
+    categories=['Quartile 1 (Lowest UPF)', 'Quartile 2 (Low-Mid)', 'Quartile 3 (Mid-High)', 'Quartile 4 (Highest UPF)'],
+    ordered=True
+)
+
+# 4. Formulate and fit the Weighted Least Squares (WLS) model to honor NHANES sampling design
+model_formula = "LOG_CRP ~ UPF_QUARTILE + RIDAGEYR + C(SEX) + C(RIDRETH3) + INDFMPIR + BMXBMI + total_daily_kcal"
+survey_model = wls(model_formula, data=df_ra_clean, weights=df_ra_clean['WTM_4YR']).fit()
+
+# Extract model metrics
+print("📝 COHORT REGRESSION OUTPUT MATRIX (Dependent Variable: ln[hs-CRP])")
+print(survey_model.summary().tables[1])
+print("=" * 80)
+
+# Calculate exponentiated coefficients to express the findings as Beta Multipliers
+# e^Beta tells you the percentage increase in absolute CRP compared to the reference group!
+print("\n💡 INTERPRETATIVE BIOMARKER MULTIPLIERS (Relative to Quartile 1 Reference):")
+for idx, coef in survey_model.params.items():
+    if "UPF_QUARTILE" in idx:
+        multiplier = np.exp(coef)
+        pct_increase = (multiplier - 1) * 100
+        p_val = survey_model.pvalues[idx]
+        print(f"   👉 {idx.split('.')[-1][:-1]:<24} : CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift in absolute CRP) | p-value = {p_val:.4f}")
+print("=" * 80)
+
+#%% [markdown]
+# # Step 9: Acute Clinical Outlier Sensitivity Analysis
+# Excludes participants with baseline hs-CRP > 10 mg/L to isolate chronic, 
+# systemic rheumatic inflammation from transient acute infections.
+
+#%%
+import pandas as pd
+import numpy as np
+from statsmodels.formula.api import wls
+
+# Load our primary integrated dataframe
+df_sensitivity = pd.read_csv("nhanes_final_model_matrix.csv")
+
+# 1. Isolate the RA cohort
+df_ra_sens = df_sensitivity[df_sensitivity['CLINICAL_ARM'] == 'RA Case'].copy()
+
+# 2. Apply the sensitivity restriction: Drop acute infections (CRP > 10.0 mg/L)
+df_ra_chronic = df_ra_sens[df_ra_sens['LBXHSCRP'] <= 10.0].copy()
+
+print("🛡️ CLINICAL SENSITIVITY MODEL ENGINE")
+print("=" * 85)
+print(f"Original RA Case Universe:                    {df_ra_sens.shape[0]} patients")
+print(f"Patients removed due to acute inflammation:  {df_ra_sens.shape[0] - df_ra_chronic.shape[0]} patients (CRP > 10 mg/L)")
+print(f"Final Chronic Stable RA Modeling Sample Size: {df_ra_chronic.shape[0]} patients")
+print("-" * 85)
+
+# 3. Clean and prepare variables on the chronic subset
+df_ra_chronic['LOG_CRP'] = np.log(df_ra_chronic['LBXHSCRP'].replace(0, 0.01))
+df_ra_chronic['SEX'] = np.where(df_ra_chronic['RIAGENDR'] == 2, 'Female', 'Male')
+df_ra_chronic['UPF_QUARTILE'] = pd.Categorical(
+    df_ra_chronic['UPF_QUARTILE'], 
+    categories=['Quartile 1 (Lowest UPF)', 'Quartile 2 (Low-Mid)', 'Quartile 3 (Mid-High)', 'Quartile 4 (Highest UPF)'],
+    ordered=True
+)
+
+analysis_cols_sens = ['LOG_CRP', 'UPF_QUARTILE', 'RIDAGEYR', 'SEX', 'RIDRETH3', 'INDFMPIR', 'BMXBMI', 'total_daily_kcal', 'WTM_4YR']
+df_ra_chronic_clean = df_ra_chronic[analysis_cols_sens].dropna().copy()
+
+# 4. Fit the identical model structure on the infection-free population
+sensitivity_model = wls(model_formula, data=df_ra_chronic_clean, weights=df_ra_chronic_clean['WTM_4YR']).fit()
+
+print("📝 SENSITIVITY REGRESSION OUTPUT MATRIX (Excluding Acute Illnesses)")
+print(sensitivity_model.summary().tables[1])
+print("=" * 85)
+
+print("\n💡 CHRONIC SENSITIVITY MULTIPLIERS (Relative to Quartile 1 Reference):")
+for idx, coef in sensitivity_model.params.items():
+    if "UPF_QUARTILE" in idx:
+        multiplier = np.exp(coef)
+        pct_increase = (multiplier - 1) * 100
+        p_val = sensitivity_model.pvalues[idx]
+        print(f"   👉 {idx.split('.')[-1][:-1]:<24} : Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | p-value = {p_val:.4f}")
+print("=" * 85)

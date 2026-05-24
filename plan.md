@@ -21,7 +21,7 @@
 - [x] **Step 4:** Map NHANES 8-digit food codes to the NOVA classification system (UPF vs. non-UPF).
 - [x] **Step 5:** Calculate participant-level percentage of daily calories derived from UPFs.
 - [x] **Step 6:** Categorize UPF intake into quartiles and verify continuous distributions.
-- [/] **Step 7:** Perform descriptive statistics and compare baseline CRP across UPF groups.
-- [ ] **Step 8:** Run multivariable survey-weighted regression models adjusting for covariates.
-- [ ] **Step 9:** Conduct sensitivity analyses (e.g., excluding CRP > 10 mg/L to rule out acute infection).
-- [ ] **Step 10:** Format and export results/tables for ACR Convergence abstract submission.
+- [x] **Step 7:** Perform descriptive statistics and compare baseline CRP across UPF groups.
+- [x] **Step 8:** Run multivariable survey-weighted regression models adjusting for covariates.
+- [x] **Step 9:** Conduct sensitivity analyses (e.g., excluding CRP > 10 mg/L to rule out acute infection).
+- [x] **Step 10:** Format and export results/tables for ACR Convergence abstract submission.
