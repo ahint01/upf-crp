@@ -1,0 +1,2 @@
+nhanes_data/DR1IFF_J.XPT filter=lfs diff=lfs merge=lfs -text
+nhanes_data/DR1IFF_I.XPT filter=lfs diff=lfs merge=lfs -text
