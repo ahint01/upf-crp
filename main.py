@@ -561,3 +561,86 @@ for idx, coef in sensitivity_model.params.items():
         p_val = sensitivity_model.pvalues[idx]
         print(f"   👉 {idx.split('.')[-1][:-1]:<24} : Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | p-value = {p_val:.4f}")
 print("=" * 85)
+
+#%%
+import pandas as pd
+import numpy as np
+import os
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+CACHE_DIR = "nhanes_data"
+FINAL_MATRIX_PATH = "nhanes_final_model_matrix.csv"
+
+# 1. Load your primary model matrix
+df_matrix = pd.read_csv(FINAL_MATRIX_PATH)
+
+# 2. Safely re-extract the complex survey design variables (SDMVSTRA & SDMVPSU) from raw demographic files
+demo_files = ['DEMO_I.XPT', 'DEMO_J.XPT']
+survey_design_list = []
+
+for f in demo_files:
+    p = os.path.join(CACHE_DIR, f)
+    if os.path.exists(p):
+        df_d = pd.read_sas(p, format='xport')[['SEQN', 'SDMVSTRA', 'SDMVPSU']]
+        df_d['SEQN'] = df_d['SEQN'].astype(int)
+        survey_design_list.append(df_d)
+
+df_design_vars = pd.concat(survey_design_list, ignore_index=True)
+
+# Merge structural design elements onto our main matrix (dropping old design columns if they exist)
+cols_to_keep = [c for c in df_matrix.columns if c not in ['SDMVSTRA', 'SDMVPSU']]
+df_survey_ready = pd.merge(df_matrix[cols_to_keep], df_design_vars, on='SEQN', how='inner')
+
+# 3. Filter to the chronic stable RA sensitivity sub-cohort (Excluding acute spikes > 10 mg/L)
+df_ra_survey = df_survey_ready[(df_survey_ready['STUDY_ARM'] == 'RA Case') & (df_survey_ready['LBXHSCRP'] <= 10.0)].copy()
+
+# 4. Final variable preparations
+df_ra_survey['LOG_CRP'] = np.log(df_ra_survey['LBXHSCRP'].replace(0, 0.01))
+df_ra_survey['SEX'] = np.where(df_ra_survey['RIAGENDR'] == 2, 'Female', 'Male')
+df_ra_survey['UPF_QUARTILE'] = pd.Categorical(
+    df_ra_survey['UPF_QUARTILE'], 
+    categories=['Quartile 1 (Lowest UPF)', 'Quartile 2 (Low-Mid)', 'Quartile 3 (Mid-High)', 'Quartile 4 (Highest UPF)'],
+    ordered=True
+)
+
+analysis_cols = ['LOG_CRP', 'UPF_QUARTILE', 'RIDAGEYR', 'SEX', 'RIDRETH3', 'INDFMPIR', 'BMXBMI', 'total_daily_kcal', 'WTM_4YR', 'SDMVSTRA', 'SDMVPSU']
+df_ra_survey_clean = df_ra_survey[analysis_cols].dropna().copy()
+
+# Sort by cluster groups to satisfy GEE structural requirement
+df_ra_survey_clean = df_ra_survey_clean.sort_values(by='SDMVPSU').reset_index(drop=True)
+
+print("👑 GOLD-STANDARD COMPLEX SURVEY REGRESSION ENGINE (GEE CLUSTER STRUCTURE)")
+print("=" * 95)
+print(f"Analytic Chronic RA Population: {df_ra_survey_clean.shape[0]} patients")
+print(f"Accounted for Clustered Primary Sampling Units (PSUs) using robust sandwich variance estimation.")
+print("-" * 95)
+
+# 5. Fit Generalized Estimating Equations (GEE) to handle full cluster correlation and sampling weights
+model_formula = "LOG_CRP ~ UPF_QUARTILE + RIDAGEYR + C(SEX) + C(RIDRETH3) + INDFMPIR + BMXBMI + total_daily_kcal"
+
+gee_model = smf.gee(
+    formula=model_formula,
+    groups="SDMVPSU", # Groups the standard errors by geographic primary sampling unit clusters
+    data=df_ra_survey_clean,
+    weights=df_ra_survey_clean['WTM_4YR'], # Applies population sampling weights
+    family=sm.families.Gaussian()
+)
+
+survey_results = gee_model.fit()
+
+print("📝 DEFENSIBLE COMPLEX SURVEY MODEL MATRIX (Dependent Variable: ln[hs-CRP])")
+print(survey_results.summary().tables[1])
+print("=" * 95)
+
+print("\n💡 ULTIMATE COHORT BIOMARKER MULTIPLIERS (Adjusted for Full Complex Sampling Layout):")
+for idx, coef in survey_results.params.items():
+    if "UPF_QUARTILE" in idx:
+        multiplier = np.exp(coef)
+        pct_increase = (multiplier - 1) * 100
+        p_val = survey_results.pvalues[idx]
+        print(f"   👉 {idx.split('.')[-1][:-1]:<24} : True Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | Clustered p-value = {p_val:.4f}")
+print("=" * 95)
+
+# Save our structural update to disk to preserve variables
+df_survey_ready.to_csv(FINAL_MATRIX_PATH, index=False)
