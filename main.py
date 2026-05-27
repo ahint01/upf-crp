@@ -572,10 +572,10 @@ import statsmodels.formula.api as smf
 CACHE_DIR = "nhanes_data"
 FINAL_MATRIX_PATH = "nhanes_final_model_matrix.csv"
 
-# 1. Load your primary model matrix
+# 1. Load the primary model matrix
 df_matrix = pd.read_csv(FINAL_MATRIX_PATH)
 
-# 2. Safely re-extract the complex survey design variables (SDMVSTRA & SDMVPSU) from raw demographic files
+# 2. Extract structural survey variables
 demo_files = ['DEMO_I.XPT', 'DEMO_J.XPT']
 survey_design_list = []
 
@@ -588,11 +588,11 @@ for f in demo_files:
 
 df_design_vars = pd.concat(survey_design_list, ignore_index=True)
 
-# Merge structural design elements onto our main matrix (dropping old design columns if they exist)
+# Merge design elements
 cols_to_keep = [c for c in df_matrix.columns if c not in ['SDMVSTRA', 'SDMVPSU']]
 df_survey_ready = pd.merge(df_matrix[cols_to_keep], df_design_vars, on='SEQN', how='inner')
 
-# 3. Filter to the chronic stable RA sensitivity sub-cohort (Excluding acute spikes > 10 mg/L)
+# 3. Filter to the chronic stable RA sensitivity sub-cohort (CRP <= 10 mg/L)
 df_ra_survey = df_survey_ready[(df_survey_ready['STUDY_ARM'] == 'RA Case') & (df_survey_ready['LBXHSCRP'] <= 10.0)].copy()
 
 # 4. Final variable preparations
@@ -604,43 +604,45 @@ df_ra_survey['UPF_QUARTILE'] = pd.Categorical(
     ordered=True
 )
 
-analysis_cols = ['LOG_CRP', 'UPF_QUARTILE', 'RIDAGEYR', 'SEX', 'RIDRETH3', 'INDFMPIR', 'BMXBMI', 'total_daily_kcal', 'WTM_4YR', 'SDMVSTRA', 'SDMVPSU']
+# Crucial Fix: Create the explicitly nested cluster ID to mimic R's nest=TRUE
+# This prevents PSU codes from colliding across different strata
+df_ra_survey['NESTED_CLUSTER'] = df_ra_survey['SDMVSTRA'].astype(int).astype(str) + "_" + df_ra_survey['SDMVPSU'].astype(int).astype(str)
+
+analysis_cols = ['LOG_CRP', 'UPF_QUARTILE', 'RIDAGEYR', 'SEX', 'RIDRETH3', 'INDFMPIR', 'BMXBMI', 'total_daily_kcal', 'WTM_4YR', 'NESTED_CLUSTER']
 df_ra_survey_clean = df_ra_survey[analysis_cols].dropna().copy()
 
-# Sort by cluster groups to satisfy GEE structural requirement
-df_ra_survey_clean = df_ra_survey_clean.sort_values(by='SDMVPSU').reset_index(drop=True)
+# Sort by our new nested cluster groups
+df_ra_survey_clean = df_ra_survey_clean.sort_values(by='NESTED_CLUSTER').reset_index(drop=True)
 
-print("👑 GOLD-STANDARD COMPLEX SURVEY REGRESSION ENGINE (GEE CLUSTER STRUCTURE)")
+print("👑 CORRECTED NESTED COMPLEX SURVEY REGRESSION ENGINE (GEE)")
 print("=" * 95)
 print(f"Analytic Chronic RA Population: {df_ra_survey_clean.shape[0]} patients")
-print(f"Accounted for Clustered Primary Sampling Units (PSUs) using robust sandwich variance estimation.")
+print(f"Total Unique Nested Cluster Groups Created: {df_ra_survey_clean['NESTED_CLUSTER'].nunique()}")
 print("-" * 95)
 
-# 5. Fit Generalized Estimating Equations (GEE) to handle full cluster correlation and sampling weights
+# 5. Fit the GEE model using the unique nested clusters
 model_formula = "LOG_CRP ~ UPF_QUARTILE + RIDAGEYR + C(SEX) + C(RIDRETH3) + INDFMPIR + BMXBMI + total_daily_kcal"
 
 gee_model = smf.gee(
     formula=model_formula,
-    groups="SDMVPSU", # Groups the standard errors by geographic primary sampling unit clusters
+    groups="NESTED_CLUSTER", # Groups properly by nested geographic clusters
     data=df_ra_survey_clean,
-    weights=df_ra_survey_clean['WTM_4YR'], # Applies population sampling weights
+    weights=df_ra_survey_clean['WTM_4YR'],
     family=sm.families.Gaussian()
 )
 
 survey_results = gee_model.fit()
 
-print("📝 DEFENSIBLE COMPLEX SURVEY MODEL MATRIX (Dependent Variable: ln[hs-CRP])")
+print("📝 FINAL NESTED COMPLEX SURVEY MODEL MATRIX (Dependent Variable: ln[hs-CRP])")
 print(survey_results.summary().tables[1])
 print("=" * 95)
 
-print("\n💡 ULTIMATE COHORT BIOMARKER MULTIPLIERS (Adjusted for Full Complex Sampling Layout):")
+print("\n💡 DEFINITIVE COHORT BIOMARKER MULTIPLIERS:")
 for idx, coef in survey_results.params.items():
     if "UPF_QUARTILE" in idx:
         multiplier = np.exp(coef)
         pct_increase = (multiplier - 1) * 100
         p_val = survey_results.pvalues[idx]
-        print(f"   👉 {idx.split('.')[-1][:-1]:<24} : True Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | Clustered p-value = {p_val:.4f}")
+        print(f"   👉 {idx.split('.')[-1][:-1]:<24} : True Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | Nest-Corrected p-value = {p_val:.4f}")
 print("=" * 95)
-
-# Save our structural update to disk to preserve variables
-df_survey_ready.to_csv(FINAL_MATRIX_PATH, index=False)
+# %%
