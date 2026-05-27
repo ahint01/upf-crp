@@ -349,3 +349,69 @@ for idx, coef in survey_results.params.items():
         p_val = survey_results.pvalues[idx]
         print(f"   👉 {idx.split('.')[-1][:-1]:<24} : True Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | Nest-Corrected p-value = {p_val:.4f}")
 print("=" * 95)
+#%%
+# 1. Load the definitive integrated model matrix
+df_matrix = pd.read_csv("nhanes_final_model_matrix.csv")
+
+# 2. Filter strictly to the Rheumatoid Arthritis cohort (n=1,126 prior to complete-case adjustment)
+df_ra_table1 = df_matrix[df_matrix['CLINICAL_ARM'] == 'RA Case'].copy()
+
+# 3. Standardize column data formats for explicit parsing
+df_ra_table1['SEX_IS_FEMALE'] = np.where(df_ra_table1['RIAGENDR'] == 2, 1, 0)
+df_ra_table1['ELEVATED_CRP'] = np.where(df_ra_table1['LBXHSCRP'] > 3.0, 1, 0)
+
+# Re-verify processing sequence order
+quartile_order = [
+    'Quartile 1 (Lowest UPF)', 
+    'Quartile 2 (Low-Mid)', 
+    'Quartile 3 (Mid-High)', 
+    'Quartile 4 (Highest UPF)'
+]
+
+print("📊 POSTER GENERATION LAYER: TABLE 1 DESCRIPTIVE CHARACTERISTICS (RA COHORT ONLY)")
+print("=" * 110)
+
+for q in quartile_order:
+    df_q = df_ra_table1[df_ra_table1['UPF_QUARTILE'] == q]
+    n_total = len(df_q)
+    
+    if n_total == 0:
+        continue
+        
+    print(f"\n🟩 {q.upper()} (Total Raw Sample Size N = {n_total})")
+    print("-" * 110)
+    
+    # Age: Mean ± SD & Median (IQR)
+    age_mean, age_sd = df_q['RIDAGEYR'].mean(), df_q['RIDAGEYR'].std()
+    age_med = df_q['RIDAGEYR'].median()
+    age_q25, age_q75 = np.percentile(df_q['RIDAGEYR'].dropna(), 25), np.percentile(df_q['RIDAGEYR'].dropna(), 75)
+    print(f"   Age (Years)              : Mean: {age_mean:.1f} ± {age_sd:.1f}  |  Median: {age_med:.1f} ({age_q25:.1f} - {age_q75:.1f})")
+    
+    # Female Sex: n (%)
+    n_female = df_q['SEX_IS_FEMALE'].sum()
+    pct_female = (n_female / n_total) * 100
+    print(f"   Female Sex               : n: {n_female} ({pct_female:.1f}%)")
+    
+    # BMI: Mean ± SD
+    bmi_mean, bmi_sd = df_q['BMXBMI'].mean(), df_q['BMXBMI'].std()
+    print(f"   BMI (kg/m²)              : Mean: {bmi_mean:.1f} ± {bmi_sd:.1f}")
+    
+    # PIR: Mean ± SD
+    pir_mean, pir_sd = df_q['INDFMPIR'].mean(), df_q['INDFMPIR'].std()
+    print(f"   Poverty-Income Ratio     : Mean: {pir_mean:.2f} ± {pir_sd:.2f}")
+    
+    # Total Daily Calories: Mean ± SD
+    kcal_mean, kcal_sd = df_q['total_daily_kcal'].mean(), df_q['total_daily_kcal'].std()
+    print(f"   Total Energy (kcal/day)  : Mean: {kcal_mean:.1f} ± {kcal_sd:.1f}")
+    
+    # Median hs-CRP: Median (IQR)
+    crp_med = df_q['LBXHSCRP'].median()
+    crp_q25, crp_q75 = np.percentile(df_q['LBXHSCRP'].dropna(), 25), np.percentile(df_q['LBXHSCRP'].dropna(), 75)
+    print(f"   Median hs-CRP (mg/L)     : Median: {crp_med:.2f} ({crp_q25:.2f} - {crp_q75:.2f})")
+    
+    # hs-CRP > 3.0 mg/L: n (%)
+    n_elev = df_q['ELEVATED_CRP'].sum()
+    pct_elev = (n_elev / n_total) * 100
+    print(f"   High Risk hs-CRP (>3)    : n: {n_elev} ({pct_elev:.1f}%)")
+    
+print("=" * 110)
