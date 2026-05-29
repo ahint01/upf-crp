@@ -349,7 +349,11 @@ for idx, coef in survey_results.params.items():
         p_val = survey_results.pvalues[idx]
         print(f"   👉 {idx.split('.')[-1][:-1]:<24} : True Chronic CRP Multiplier = {multiplier:.2f} ({pct_increase:+.1f}% shift) | Nest-Corrected p-value = {p_val:.4f}")
 print("=" * 95)
-#%%
+
+# %% [markdown]
+# # Step 9 & 10: Table 1 — Descriptive characteristics (RA cohort)
+
+# %%
 # 1. Load the definitive integrated model matrix
 df_matrix = pd.read_csv("nhanes_final_model_matrix.csv")
 
