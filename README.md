@@ -1,79 +1,62 @@
 # Ultra-processed food intake and inflammation in rheumatoid arthritis
 
-Cross-sectional analysis of NHANES 2015–2018 data examining whether higher ultra-processed food (UPF) intake is associated with systemic inflammation (high-sensitivity CRP) among adults with self-reported rheumatoid arthritis (RA).
+Analysis code for the poster **"Ultra-Processed Food Intake and Inflammatory Burden Among Adults with Rheumatoid Arthritis: A NHANES Analysis"**.
 
-**Primary question:** Among adults with RA, is greater UPF intake (as a share of daily calories) associated with higher CRP?
+Julia Tripodo, B.S., Andrew Hinton, B.S., Naziha Slimani, M.D.
+College of Medicine, University of Central Florida
 
-## Repository layout
+Cross-sectional analysis of pooled NHANES 2015–2018 data asking whether, among adults with self-reported rheumatoid arthritis (RA), a higher share of calories from ultra-processed foods (UPF) is associated with higher high-sensitivity C-reactive protein (hs-CRP).
 
-| Path | Description |
-|------|-------------|
-| `main.py` | End-to-end pipeline: download, merge, cohort definition, NOVA mapping, quartiles, survey-weighted GEE models, Table 1 output |
-| `plan.md` | Step-by-step implementation checklist |
-| `nhanes_data/` | Cached NHANES SAS transport (`.XPT`) files |
-| `nhanes_master_pooled.csv` | Pooled 2015–2018 demographic, clinical, dietary, and lab data |
-| `nhanes_analytic_cohort.csv` | Adults with valid arthritis and hs-CRP records; RA / control / other arms |
-| `nhanes_final_model_matrix.csv` | Analysis-ready file with UPF exposure, quartiles, survey design vars |
+## Results
 
-## Requirements
+| | |
+|---|---|
+| Analytic sample | 9,199 adults ≥20 with a valid arthritis response, hs-CRP and a day-1 dietary recall |
+| RA participants | 1,126 |
+| Adjusted model (RA, hs-CRP ≤10 mg/L, complete covariates) | 886 |
+| Mean share of calories from UPF (whole sample) | 47.4% |
+| Median hs-CRP in RA, lowest vs highest UPF quartile | 2.20 vs 2.81 mg/L |
 
-- Python 3.10+
-- [Git LFS](https://git-lfs.com/) (two large dietary recall files are stored with LFS)
+Adjusted hs-CRP ratios versus the lowest UPF quartile (survey-weighted GEE, adjusted for age, sex, race/ethnicity, poverty-income ratio, BMI and total energy intake):
 
-## Setup
+| UPF quartile | hs-CRP ratio | 95% CI | p |
+|---|---|---|---|
+| Q2 (low-mid) | 1.26 | 1.00–1.58 | 0.055 |
+| Q3 (mid-high) | 1.28 | 1.04–1.59 | 0.022 |
+| Q4 (highest) | 1.30 | 0.99–1.70 | 0.058 |
+
+These are cross-sectional associations, not causal estimates. RA status is self-reported and diet comes from a single 24-hour recall. Results are exploratory and not clinical guidance.
+
+## Running the analysis
+
+Requires Python 3.10+.
 
 ```bash
 git clone git@github.com:ahint01/upf-crp.git
 cd upf-crp
-git lfs pull
 
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-## Running the analysis
-
-`main.py` is a linear script with `# %%` cell markers (VS Code / Cursor “Run Cell” or Jupyter-compatible runners). Run the full file:
-
-```bash
 python main.py
 ```
 
-On first run, smaller NHANES files are downloaded from the CDC into `nhanes_data/`. Large individual dietary recall files (`DR1IFF_I.XPT`, `DR1IFF_J.XPT`) are included via Git LFS. Intermediate CSVs are written at each stage and reused on subsequent runs.
+`main.py` is a linear script with `# %%` cell markers, so it also runs cell by cell in VS Code, Cursor or Jupyter.
 
-## Pipeline overview
+The first run downloads the NHANES public-use files from the CDC into `nhanes_data/` (the dietary recall files are large, so allow a few minutes) and writes intermediate CSVs to the repo root. Later runs reuse the cached files. Data files are not tracked in git; everything is regenerated from the CDC source.
 
-1. **Ingest** — Download and merge DEMO, MCQ, BMX, DR1TOT, and HSCRP for 2015–2016 and 2017–2018.
-2. **Cohort** — Adults ≥20 with valid arthritis questionnaire and hs-CRP; classify RA cases (`MCQ160A` + `MCQ195`), controls, and other arthritis.
-3. **Diet / NOVA** — Line-level dietary recalls; rule-based 8-digit USDA code mapping to UPF; participant % calories from UPF.
-4. **Quartiles** — Survey-weighted (`WTDRD1`) UPF quartiles within the analytic sample.
-5. **Descriptives** — CRP distributions by UPF quartile in the RA cohort.
-6. **Survey design** — Attach `SDMVSTRA` and `SDMVPSU` from DEMO files.
-7. **Regression** — GEE on log(CRP) with nested cluster IDs (`SDMVSTRA` + `SDMVPSU`), survey weights, and covariates (age, sex, race/ethnicity, PIR, BMI, total kcal). RA subset with hs-CRP ≤ 10 mg/L.
-8. **Table 1** — Descriptive characteristics of the RA cohort by UPF quartile.
+## Pipeline
 
-See `plan.md` for the detailed checklist.
+1. **Ingest:** download and merge DEMO, MCQ, BMX, DR1TOT and HSCRP for 2015–2016 (`_I`) and 2017–2018 (`_J`), the two cycles with hs-CRP.
+2. **Cohort:** adults ≥20 with a valid arthritis answer and hs-CRP. RA = ever told arthritis (`MCQ160A == 1`) and type rheumatoid (`MCQ195 == 1`).
+3. **UPF exposure:** classify each food in the day-1 individual foods file (`DR1IFF`) by its 8-digit USDA food code using an adapted NOVA approach, then compute each participant's percent of calories from UPF.
+4. **Quartiles:** weighted UPF quartiles (`WTDRD1 / 2`, the NCHS rule for pooling two cycles) on the full analytic sample.
+5. **Descriptives:** hs-CRP median, IQR and share >3 mg/L by quartile in RA.
+6. **Survey design:** attach strata (`SDMVSTRA`) and PSUs (`SDMVPSU`).
+7. **Model:** GEE on log(hs-CRP) with sampling weights and stratum–PSU clusters, in RA participants with hs-CRP ≤10 mg/L to exclude likely acute inflammation.
+8. **Table 1:** RA characteristics by UPF quartile.
 
-## Key variables
+## Data
 
-| Role | Variable |
-|------|----------|
-| Exposure | % daily calories from NOVA Group 4 (UPF), quartiled |
-| Outcome | hs-CRP (`LBXHSCRP`), log-transformed in models |
-| Population | Self-reported RA (`STUDY_ARM == 'RA Case'`) |
-| Covariates | Age, sex, race/ethnicity, BMI, poverty–income ratio, total energy intake |
-| Weights | `WTDRD1` / 2 for 4-year pooled dietary weights |
-
-## Data sources
-
-Public-use NHANES files from the [CDC NHANES site](https://wwwn.cdc.gov/nchs/nhanes/):
-
-- **2015–2016** (suffix `I`): 2015 release year in download URLs  
-- **2017–2018** (suffix `J`): 2017 release year in download URLs  
-
-This repository is for reproducible research. NHANES data are de-identified public-use files; analyses use survey weights and complex design variables where noted. Results are exploratory and not clinical guidance.
-
-## License
-
-Add a license file if you plan to share or publish this code. NHANES data remain subject to [NCHS data use policies](https://www.cdc.gov/nchs/nhanes/index.htm).
+Public-use files from the [CDC NHANES site](https://wwwn.cdc.gov/nchs/nhanes/), subject to [NCHS data use policies](https://www.cdc.gov/nchs/nhanes/index.htm).
